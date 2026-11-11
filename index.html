@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Monitoring Lingkungan Ruang Operasi (Multi-Alat)</title>
+    <!-- Chart.js untuk grafik -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #f4f6f9;
+            --card-bg: #ffffff;
+            --text-main: #333333;
+            --primary: #0d6efd;
+            --success: #198754;
+            --danger: #dc3545;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+        }
+        .container { max-width: 1300px; margin: 0 auto; }
+        header { text-align: center; margin-bottom: 20px; }
+        header h1 { margin: 0; font-size: 26px; color: #2c3e50; }
+        header p { margin: 5px 0 0; color: #666; font-size: 14px; }
+        
+        .room-nav { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .room-btn { padding: 9px 18px; border: none; background-color: #e2e8f0; color: #475569; font-weight: 600; border-radius: 8px; cursor: pointer; transition: all 0.3s ease; }
+        .room-btn.active { background-color: var(--primary); color: white; box-shadow: 0 4px 6px rgba(13, 110, 253, 0.2); }
+
+        /* 5 Kartu Berderet Rapi */
+        .cards-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 25px; }
+        @media (max-width: 1100px) { .cards-grid { grid-template-columns: repeat(3, 1fr); } }
+        @media (max-width: 700px) { .cards-grid { grid-template-columns: repeat(1, 1fr); } }
+        
+        .card { background: var(--card-bg); border-radius: 10px; padding: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-top: 4px solid #cbd5e1; transition: transform 0.2s; }
+        .card.active-card { border-top-color: var(--primary); transform: translateY(-2px); box-shadow: 0 6px 12px rgba(0,0,0,0.1); }
+        .card h3 { margin: 0 0 8px 0; font-size: 14px; color: #1e293b; text-align: center; }
+        .metric { font-size: 12px; margin: 4px 0; display: flex; justify-content: space-between; }
+        .val { font-weight: bold; }
+        .badge { display: inline-block; padding: 3px 6px; border-radius: 4px; font-size: 10px; color: white; text-align: center; width: 100%; box-sizing: border-box; margin-top: 4px; }
+        .bg-ok { background-color: var(--success); }
+        .bg-bad { background-color: var(--danger); }
+        .bg-wait { background-color: #6c757d; }
+
+        .detail-section { background: var(--card-bg); border-radius: 10px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 25px; }
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; border-bottom: 2px solid #f1f5f9; padding-bottom: 10px; }
+        .section-header h2 { font-size: 17px; margin: 0; color: #1e293b; }
+        .chart-container { position: relative; height: 300px; width: 100%; }
+
+        .export-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        input[type="month"], button.btn-export, button.btn-chart-export { padding: 6px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: white; font-size: 13px; cursor: pointer; font-weight: 600; }
+        button.btn-export { background-color: var(--success); color: white; border: none; }
+        button.btn-chart-export { background-color: #0284c7; color: white; border: none; }
+        button.btn-export:hover, button.btn-chart-export:hover { opacity: 0.9; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        table, th, td { border: 1px solid #e2e8f0; }
+        th, td { padding: 8px 10px; text-align: center; }
+        th { background-color: #f8fafc; color: #475569; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>Sistem Monitoring Lingkungan Ruang Operasi</h1>
+        <p>Standar Permenkes No. 2 Tahun 2023 (Suhu: 19-24°C | Kelembaban: 40-60%RH)</p>
+    </header>
+
+    <!-- Navigasi Pemilihan 5 Alat -->
+    <div class="room-nav" id="roomNav">
+        <button class="room-btn active" onclick="selectRoom(1)">Ruang Operasi 1</button>
+        <button class="room-btn" onclick="selectRoom(2)">Ruang Operasi 2</button>
+        <button class="room-btn" onclick="selectRoom(3)">Ruang Operasi 3</button>
+        <button class="room-btn" onclick="selectRoom(4)">Ruang Operasi 4</button>
+        <button class="room-btn" onclick="selectRoom(5)">Ruang Operasi 5</button>
+    </div>
+
+    <!-- 5 Kartu Status Real-time (Suhu, Kelembaban, Status) BERDERET -->
+    <div class="cards-grid" id="cardsGrid">
+        <!-- Kartu akan digenerate otomatis oleh JavaScript -->
+    </div>
+
+    <!-- Grafik Tren 24 Jam dengan Sumbu X dan Y -->
+    <div class="detail-section">
+        <div class="section-header">
+            <h2 id="chartTitle">Grafik Tren 24 Jam - Ruang Operasi 1</h2>
+            <button class="btn-chart-export" onclick="unduhGambarGrafik()">Unduh Grafik (PNG)</button>
+        </div>
+        <div class="chart-container">
+            <canvas id="sensorChart"></canvas>
+        </div>
+    </div>
+
+    <!-- Tabel Log Otomatis (07.00, 14.00, 21.00 WIB) -->
+    <div class="detail-section">
+        <div class="section-header">
+            <h2 id="tableTitle">Log Otomatis (07.00, 14.00, 21.00 WIB) - Ruang Operasi 1</h2>
+            <div class="export-controls">
+                <label for="filterBulan" style="font-size: 13px;">Pilih Bulan:</label>
+                <input type="month" id="filterBulan" onchange="muatDataLog()">
+                <button class="btn-export" onclick="eksporCSVBulanan()">Unduh Rekap Excel/CSV (Bulanan)</button>
+            </div>
+        </div>
+        <div style="overflow-x: auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Hari</th>
+                        <th>Tanggal</th>
+                        <th>Jam</th>
+                        <th>Suhu (°C)</th>
+                        <th>Kelembaban (%RH)</th>
+                        <th>Status Ruangan</th>
+                    </tr>
+                </thead>
+                <tbody id="logTableBody">
+                    <tr><td colspan="6">Memuat data log otomatis...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Konfigurasi URL Database Masing-masing Alat
+    const DEVICE_URLS = {
+        1: "https://monitoring-ruang-operasi-af3ff-default-rtdb.asia-southeast1.firebasedatabase.app/monitoring", // Alat Kamu
+        2: "", // Masukkan URL Database Alat Teman ke-2 di sini
+        3: "", // Masukkan URL Database Alat Teman ke-3 di sini
+        4: "", // Masukkan URL Database Alat Teman ke-4 di sini
+        5: ""  // Masukkan URL Database Alat Teman ke-5 di sini
+    };
+    
+    let currentRoom = 1;
+    let myChart = null;
+
+    // Render 5 Kartu Ruangan
+    function initCards() {
+        const grid = document.getElementById('cardsGrid');
+        if (!grid) return;
+        grid.innerHTML = '';
+        for (let i = 1; i <= 5; i++) {
+            grid.innerHTML += `
+                <div class="card ${i === currentRoom ? 'active-card' : ''}" id="card-${i}" onclick="selectRoom(${i})" style="cursor:pointer;">
+                    <h3>Ruang Operasi ${i}</h3>
+                    <div class="metric"><span>Suhu:</span> <span class="val" id="card-suhu-${i}">--.- °C</span></div>
+                    <div class="metric"><span>Kelembaban:</span> <span class="val" id="card-rh-${i}">--.- %</span></div>
+                    <div id="card-status-${i}" class="badge bg-wait">Menunggu...</div>
+                </div>
+            `;
+        }
+    }
+
+    function selectRoom(roomNum) {
+        currentRoom = roomNum;
+        document.querySelectorAll('.room-btn').forEach((btn, idx) => {
+            if (idx + 1 === roomNum) btn.classList.add('active');
+            else btn.classList.remove('active');
+        });
+        document.querySelectorAll('.card').forEach((card, idx) => {
+            if (idx + 1 === roomNum) card.classList.add('active-card');
+            else card.classList.remove('active-card');
+        });
+        document.getElementById('chartTitle').innerText = `Grafik Tren 24 Jam - Ruang Operasi ${roomNum}`;
+        document.getElementById('tableTitle').innerText = `Log Otomatis (07.00, 14.00, 21.00 WIB) - Ruang Operasi ${roomNum}`;
+        
+        perbaruiUIAlat();
+        ambilDataLive();
+    }
+
+    function initChart() {
+        const ctx = document.getElementById('sensorChart').getContext('2d');
+        myChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: ['07:00', '14:00', '21:00'],
+                datasets: [
+                    {
+                        label: 'Suhu (°C)',
+                        data: [],
+                        borderColor: '#fd7e14',
+                        backgroundColor: 'rgba(253, 126, 20, 0.1)',
+                        borderWidth: 2,
+                        yAxisID: 'y-suhu',
+                        tension: 0.2
+                    },
+                    {
+                        label: 'Kelembaban (%RH)',
+                        data: [],
+                        borderColor: '#0dcaf0',
+                        backgroundColor: 'rgba(13, 202, 240, 0.1)',
+                        borderWidth: 2,
+                        yAxisID: 'y-rh',
+                        tension: 0.2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Waktu (Jam)' } },
+                    'y-suhu': { type: 'linear', position: 'left', title: { display: true, text: 'Suhu (°C)' }, min: 10, max: 40 },
+                    'y-rh': { type: 'linear', position: 'right', title: { display: true, text: 'Kelembaban (%RH)' }, min: 0, max: 100, grid: { drawOnChartArea: false } }
+                }
+            }
+        });
+    }
+
+    // Ambil Data Live untuk Kartu Status
+    async function ambilDataLive() {
+        let baseUrl = DEVICE_URLS[currentRoom];
+        if (!baseUrl) {
+            document.getElementById(`card-suhu-${currentRoom}`).innerText = `Belum Ada URL`;
+            document.getElementById(`card-rh-${currentRoom}`).innerText = `--.- %`;
+            let badge = document.getElementById(`card-status-${currentRoom}`);
+            badge.innerText = "TIDAK TERHUBUNG";
+            badge.className = "badge bg-wait";
+            return;
+        }
+
+        try {
+            let response = await fetch(baseUrl + "/live.json");
+            let data = await response.json();
+
+            if (data && data.suhu !== undefined) {
+                document.getElementById(`card-suhu-${currentRoom}`).innerText = `${data.suhu.toFixed(1)} °C`;
+                document.getElementById(`card-rh-${currentRoom}`).innerText = `${data.kelembaban.toFixed(1)} %`;
+                let badge = document.getElementById(`card-status-${currentRoom}`);
+                badge.innerText = data.status;
+                badge.className = "badge " + (data.status === "NORMAL" ? "bg-ok" : "bg-bad");
+            }
+        } catch (error) {
+            console.error("Gagal mengambil data live alat " + currentRoom, error);
+        }
+    }
+
+    // Perbarui Grafik dan Riwayat Alat Terpilih
+    async function perbaruiUIAlat() {
+        let baseUrl = DEVICE_URLS[currentRoom];
+        let labels = [], suhuArr = [], rhArr = [];
+        
+        if (baseUrl) {
+            try {
+                let res = await fetch(baseUrl + "/riwayat.json");
+                let riwayatData = await res.json();
+
+                if (riwayatData) {
+                    let tglKeys = Object.keys(riwayatData).sort();
+                    if (tglKeys.length > 0) {
+                        let tglTerbaru = tglKeys[tglKeys.length - 1];
+                        let jamData = riwayatData[tglTerbaru];
+                        
+                        Object.keys(jamData).sort().forEach(jamKey => {
+                            let item = jamData[jamKey];
+                            labels.push(item.jam || jamKey);
+                            suhuArr.push(item.suhu);
+                            rhArr.push(item.kelembaban);
+                        });
+                    }
+                }
+                muatDataLog(riwayatData);
+            } catch (e) {
+                console.error("Gagal memuat riwayat", e);
+            }
+        } else {
+            muatDataLog(null);
+        }
+
+        if (myChart) {
+            myChart.data.labels = labels.length > 0 ? labels : ['07:00', '14:00', '21:00'];
+            myChart.data.datasets[0].data = suhuArr;
+            myChart.data.datasets[1].data = rhArr;
+            myChart.update();
+        }
+    }
+
+    // Muat Tabel Log Waktu Tertentu (07.00, 14.00, 21.00 WIB)
+    async function muatDataLog(preloadedRiwayat = null) {
+        let bulanPilih = document.getElementById('filterBulan').value;
+        const tbody = document.getElementById('logTableBody');
+        tbody.innerHTML = `<tr><td colspan="6">Memuat data log...</td></tr>`;
+
+        let baseUrl = DEVICE_URLS[currentRoom];
+        if (!baseUrl) {
+            tbody.innerHTML = `<tr><td colspan="6">Alat ${currentRoom} belum diatur URL databasenya di sistem web ini.</td></tr>`;
+            return;
+        }
+
+        try {
+            let riwayatData = preloadedRiwayat;
+            if (!riwayatData) {
+                let res = await fetch(baseUrl + "/riwayat.json");
+                riwayatData = await res.json();
+            }
+
+            tbody.innerHTML = '';
+            let adaData = false;
+            const jamWajib = ["0700", "1400", "2100"];
+
+            if (riwayatData) {
+                Object.keys(riwayatData).sort().forEach(tgl => {
+                    if (bulanPilih && !tgl.startsWith(bulanPilih)) return;
+
+                    let jamMap = riwayatData[tgl];
+                    jamWajib.forEach(targetJam => {
+                        if (jamMap[targetJam]) {
+                            let d = jamMap[targetJam];
+                            adaData = true;
+                            let jamTampil = d.jam || (targetJam.slice(0,2) + ":" + targetJam.slice(2,4) + ":00");
+
+                            let tr = document.createElement('tr');
+                            tr.innerHTML = `
+                                <td>${d.hari || '-'}</td>
+                                <td>${d.tanggal || tgl}</td>
+                                <td>${jamTampil}</td>
+                                <td>${d.suhu !== undefined ? d.suhu.toFixed(1) : '-'}</td>
+                                <td>${d.kelembaban !== undefined ? d.kelembaban.toFixed(1) : '-'}</td>
+                                <td><span style="color: ${d.status === 'NORMAL' ? 'green' : 'red'}; font-weight:bold;">${d.status || '-'}</span></td>
+                            `;
+                            tbody.appendChild(tr);
+                        }
+                    });
+                });
+            }
+
+            if (!adaData) {
+                tbody.innerHTML = `<tr><td colspan="6">Belum ada data otomatis (07.00, 14.00, 21.00) untuk bulan ini.</td></tr>`;
+            }
+        } catch (err) {
+            tbody.innerHTML = `<tr><td colspan="6">Gagal memuat data log.</td></tr>`;
+        }
+    }
+
+    function eksporCSVBulanan() {
+        let rows = document.querySelectorAll("#logTableBody tr");
+        if (rows.length === 0 || rows[0].innerText.includes("Memuat") || rows[0].innerText.includes("Belum") || rows[0].innerText.includes("belum diatur")) {
+            alert("Tidak ada data log untuk diekspor!");
+            return;
+        }
+
+        let csv = [["Hari", "Tanggal", "Jam", "Suhu (C)", "Kelembaban (%RH)", "Status Ruangan"].join(",")];
+        rows.forEach(row => {
+            let cols = row.querySelectorAll("td");
+            if (cols.length === 6) {
+                csv.push([cols[0].innerText, cols[1].innerText, cols[2].innerText, cols[3].innerText, cols[4].innerText, `"${cols[5].innerText}"`].join(","));
+            }
+        });
+
+        let bulanPilih = document.getElementById('filterBulan').value || "Bulanan";
+        let blob = new Blob([csv.join("\n")], { type: 'text/csv;charset=utf-8;' });
+        let link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `Log_Ruang_Operasi_${currentRoom}_${bulanPilih}.csv`;
+        link.click();
+    }
+
+    function unduhGambarGrafik() {
+        let link = document.createElement('a');
+        link.download = `Grafik_Ruang_Operasi_${currentRoom}.png`;
+        link.href = myChart.toBase64Image();
+        link.click();
+    }
+
+    window.onload = function() {
+        let now = new Date();
+        let yyyy = now.getFullYear();
+        let mm = String(now.getMonth() + 1).padStart(2, '0');
+        document.getElementById('filterBulan').value = `${yyyy}-${mm}`;
+
+        initCards();
+        initChart();
+        ambilDataLive();
+        perbaruiUIAlat();
+
+        setInterval(ambilDataLive, 5000);
+    };
+</script>
+
+</body>
+</html>
