@@ -7,6 +7,7 @@
     <!-- Chart.js untuk grafik -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
     <style>
         :root {
             --bg-color: #f4f6f9;
@@ -81,7 +82,7 @@
         <button class="room-btn" onclick="selectRoom(5)">Ruang Operasi 5</button>
     </div>
 
-    <!-- 5 Kartu Status Real-time (Suhu, Kelembaban, Status) BERDERET -->
+    <!-- 5 Kartu Status Real-time BERDERET -->
     <div class="cards-grid" id="cardsGrid">
         <!-- Kartu akan digenerate otomatis oleh JavaScript -->
     </div>
@@ -130,21 +131,21 @@
 <script>
     // Konfigurasi URL Database Masing-masing Alat
     const DEVICE_URLS = {
-        1: "https://monitoring-ruang-operasi-af3ff-default-rtdb.asia-southeast1.firebasedatabase.app/monitoring", // Alat Kamu
-        2: "https://monitoring-ruang-ok-production.up.railway.app/api/data", // Masukkan URL Database Alat Teman ke-2 di sini
-        3: "", // Masukkan URL Database Alat Teman ke-3 di sini
-        4: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp04", // Masukkan URL Database Alat Teman ke-4 di sini
-        5: ""  // Masukkan URL Database Alat Teman ke-5 di sini
+        1: "https://monitoring-ruang-operasi-af3ff-default-rtdb.asia-southeast1.firebasedatabase.app/monitoring", 
+        2: "https://monitoring-ruang-ok-production.up.railway.app/api/data", 
+        3: "", 
+        4: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp04", 
+        5: ""  
     };
 
-    const OFFLINE_DETIK = 30;                       // data tidak berubah selama ini -> alat dianggap offline
+    const OFFLINE_DETIK = 30;                      
     const JAM_WAJIB = ["0700", "1400", "2100"];
     const BATAS = { suhuMin: 19, suhuMax: 24, rhMin: 40, rhMax: 60 };
 
     let currentRoom = 1;
     let myChart = null;
     let cacheData = { riwayat: null, log: null, siap: false };
-    const lacak = {};   // nomor ruang -> { sig, tUbah }
+    const lacak = {};   
 
     // ==== FUNGSI MURNI (mulai) ====
     const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -158,8 +159,6 @@
         return "SUHU DAN KELEMBABAN TIDAK NORMAL";
     }
 
-    // Baris tabel log 07.00 / 14.00 / 21.00.
-    // Prioritas: data dari /log (tersimpan otomatis alat); jika belum ada, pakai /riwayat pada jam yang sama.
     function bangunBarisLog(logData, riwayatData, bulan) {
         const baris = [];
         const semuaTgl = new Set([...Object.keys(logData || {}), ...Object.keys(riwayatData || {})]);
@@ -175,7 +174,6 @@
         return baris;
     }
 
-    // Data grafik: tanggal terbaru yang ada di riwayat
     function bangunSeriesGrafik(riwayatData) {
         const hasil = { labels: [], suhu: [], rh: [], tgl: null };
         if (!riwayatData) return hasil;
@@ -201,7 +199,6 @@
         return fetch(url).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
     }
 
-    // Render 5 Kartu Ruangan dengan Indikator Jam
     function initCards() {
         const grid = document.getElementById('cardsGrid');
         if (!grid) return;
@@ -275,7 +272,6 @@
         });
     }
 
-    // ---------- Kartu real-time ----------
     async function perbaruiKartu(i) {
         const baseUrl = DEVICE_URLS[i];
         const suhuEl = document.getElementById(`card-suhu-${i}`);
@@ -295,8 +291,11 @@
         }
 
         try {
-            // Penyesuaian khusus untuk Ruang 4 atau ruangan lain
-            const targetUrl = (i === 4) ? baseUrl + ".json" : baseUrl + "/live.json";
+            let targetUrl = baseUrl;
+            if (!baseUrl.includes("railway.app")) {
+                targetUrl = (i === 4) ? baseUrl + ".json" : baseUrl + "/live.json";
+            }
+            
             const data = await fetchJson(targetUrl);
 
             if (data && (data.suhu !== undefined || data.temperature !== undefined)) {
@@ -304,7 +303,6 @@
                 const rh = Number(data.kelembaban !== undefined ? data.kelembaban : data.humidity);
                 const status = data.status || hitungStatus(suhu, rh);
 
-                // Deteksi alat mati: isi data tidak berubah (jam alat berhenti bertambah)
                 const adaWaktu = data.jam !== undefined || data.timestamp !== undefined || data.waktu !== undefined;
                 const sig = JSON.stringify(data);
                 const L = lacak[i] || (lacak[i] = { sig: null, tUbah: Date.now() });
@@ -313,13 +311,11 @@
 
                 suhuEl.innerText = isNaN(suhu) ? "--.- °C" : `${suhu.toFixed(1)} °C`;
                 rhEl.innerText = isNaN(rh) ? "--.- %" : `${rh.toFixed(1)} %`;
-                // Jam yang tampil = jam dari alat (RTC), bukan jam komputer
                 timeEl.innerText = data.jam || data.waktu || new Date(L.tUbah).toTimeString().split(' ')[0];
 
                 if (basi) setBadge("ALAT OFFLINE (data berhenti)", "bg-wait");
                 else setBadge(status, status === "NORMAL" ? "bg-ok" : "bg-bad");
             } else {
-                // URL valid tapi data kosong (alat belum pernah / tidak mengirim data)
                 kosong();
                 timeEl.innerText = "--:--:--";
                 setBadge("ALAT TIDAK NYALA", "bg-bad");
@@ -335,7 +331,6 @@
         await Promise.all([1, 2, 3, 4, 5].map(perbaruiKartu));
     }
 
-    // ---------- Grafik & riwayat alat terpilih ----------
     async function perbaruiUIAlat() {
         const room = currentRoom;
         const baseUrl = DEVICE_URLS[room];
@@ -346,7 +341,7 @@
                 fetchJson(baseUrl + "/riwayat.json").catch(e => { console.error("Gagal memuat riwayat", e); return null; }),
                 fetchJson(baseUrl + "/log.json").catch(e => { console.error("Gagal memuat log", e); return null; })
             ]);
-            if (room !== currentRoom) return;   // pengguna sudah pindah ruangan
+            if (room !== currentRoom) return;   
             cacheData = { riwayat, log, siap: true };
         } else {
             cacheData.siap = true;
@@ -366,7 +361,6 @@
             `Grafik Tren 24 Jam - Ruang Operasi ${currentRoom}` + (g.tgl ? ` (${g.tgl})` : "");
     }
 
-    // ---------- Tabel log 07.00, 14.00, 21.00 ----------
     function renderLog() {
         const tbody = document.getElementById('logTableBody');
         if (!DEVICE_URLS[currentRoom]) {
@@ -400,38 +394,64 @@
         }).join('');
     }
 
-    // Unduh Rekap Langsung Menjadi File Excel (.xlsx)
-    function eksporExcelBulanan() {
+    // ---------- FUNGSI UTAMA EXCEL + GRAFIK (ExcelJS) ----------
+    async function eksporExcelBulanan() {
         const rows = document.querySelectorAll("#logTableBody tr");
         if (rows.length === 0 || rows[0].innerText.includes("Memuat") || rows[0].innerText.includes("Belum") || rows[0].innerText.includes("belum diatur")) {
             alert("Tidak ada data log untuk diekspor!");
             return;
         }
 
-        const dataExcel = [
-            ["Hari", "Tanggal", "Jam", "Suhu (°C)", "Kelembaban (%RH)", "Status Ruangan"]
-        ];
+        // 1. Buat Workbook menggunakan ExcelJS
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet(`Rekap Ruang ${currentRoom}`);
+
+        // 2. Tambahkan Judul & Header Tabel
+        sheet.addRow([`LAPORAN REKAPITULASI BULANAN - RUANG OPERASI ${currentRoom}`]);
+        sheet.addRow(["Hari", "Tanggal", "Jam", "Suhu (°C)", "Kelembaban (%RH)", "Status Ruangan"]);
+
+        // 3. Masukkan data tabel baris per baris
         rows.forEach(row => {
             const cols = row.querySelectorAll("td");
             if (cols.length === 6) {
-                const s = parseFloat(cols[3].innerText), h = parseFloat(cols[4].innerText);
-                dataExcel.push([
+                const s = parseFloat(cols[3].innerText);
+                const h = parseFloat(cols[4].innerText);
+                sheet.addRow([
                     cols[0].innerText,
                     cols[1].innerText,
                     cols[2].innerText,
-                    isNaN(s) ? cols[3].innerText : s,   // angka tetap terbaca sebagai angka di Excel
+                    isNaN(s) ? cols[3].innerText : s,
                     isNaN(h) ? cols[4].innerText : h,
                     cols[5].innerText
                 ]);
             }
         });
 
-        const wb = XLSX.utils.book_new();
-        const ws = XLSX.utils.aoa_to_sheet(dataExcel);
-        XLSX.utils.book_append_sheet(wb, ws, "Log Rekap");
+        // 4. Ambil gambar grafik dari elemen Canvas di layar & tempel ke Excel
+        const canvasEl = document.getElementById('sensorChart');
+        if (canvasEl && myChart) {
+            const base64Image = canvasEl.toDataURL('image/png');
+            
+            const imageId = workbook.addImage({
+                base64: base64Image,
+                extension: 'png',
+            });
 
+            // Sisipkan gambar grafik ke sebelah kanan tabel data (di Kolom H, Baris 2)
+            sheet.addImage(imageId, {
+                tl: { col: 7, row: 1 }, 
+                ext: { width: 500, height: 280 } 
+            });
+        }
+
+        // 5. Proses dan download file Excel (.xlsx)
+        const buffer = await workbook.xlsx.writeBuffer();
+        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const link = document.createElement('a');
+        link.href = window.URL.createObjectURL(blob);
         const bulanPilih = document.getElementById('filterBulan').value || "Bulanan";
-        XLSX.writeFile(wb, `Log_Ruang_Operasi_${currentRoom}_${bulanPilih}.xlsx`);
+        link.download = `Laporan_Dan_Grafik_Ruang_${currentRoom}_${bulanPilih}.xlsx`;
+        link.click();
     }
 
     function unduhGambarGrafik() {
@@ -452,8 +472,8 @@
         ambilDataLive();
         perbaruiUIAlat();
 
-        setInterval(ambilDataLive, 5000);    // kartu real-time
-        setInterval(perbaruiUIAlat, 60000);  // grafik & log diperbarui tiap 1 menit
+        setInterval(ambilDataLive, 5000);    
+        setInterval(perbaruiUIAlat, 60000);  
     };
 </script>
 
