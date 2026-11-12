@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sistem Monitoring Lingkungan Ruang Operasi (Multi-Alat)</title>
     <!-- Chart.js untuk grafik -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         :root {
             --bg-color: #f4f6f9;
@@ -26,7 +27,7 @@
         header { text-align: center; margin-bottom: 20px; }
         header h1 { margin: 0; font-size: 26px; color: #2c3e50; }
         header p { margin: 5px 0 0; color: #666; font-size: 14px; }
-        
+
         .room-nav { display: flex; justify-content: center; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
         .room-btn { padding: 9px 18px; border: none; background-color: #e2e8f0; color: #475569; font-weight: 600; border-radius: 8px; cursor: pointer; transition: all 0.3s ease; }
         .room-btn.active { background-color: var(--primary); color: white; box-shadow: 0 4px 6px rgba(13, 110, 253, 0.2); }
@@ -35,7 +36,7 @@
         .cards-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 25px; }
         @media (max-width: 1100px) { .cards-grid { grid-template-columns: repeat(3, 1fr); } }
         @media (max-width: 700px) { .cards-grid { grid-template-columns: repeat(1, 1fr); } }
-        
+
         .card { background: var(--card-bg); border-radius: 10px; padding: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-top: 4px solid #cbd5e1; transition: transform 0.2s; }
         .card.active-card { border-top-color: var(--primary); transform: translateY(-2px); box-shadow: 0 6px 12px rgba(0,0,0,0.1); }
         .card h3 { margin: 0 0 8px 0; font-size: 14px; color: #1e293b; text-align: center; }
@@ -102,8 +103,8 @@
             <h2 id="tableTitle">Log Otomatis (07.00, 14.00, 21.00 WIB) - Ruang Operasi 1</h2>
             <div class="export-controls">
                 <label for="filterBulan" style="font-size: 13px;">Pilih Bulan:</label>
-                <input type="month" id="filterBulan" onchange="muatDataLog()">
-                <button class="btn-export" onclick="eksporCSVBulanan()">Unduh Rekap Excel/CSV (Bulanan)</button>
+                <input type="month" id="filterBulan" onchange="renderLog()">
+                <button class="btn-export" onclick="eksporExcelBulanan()">Unduh Rekap Excel (.xlsx)</button>
             </div>
         </div>
         <div style="overflow-x: auto;">
@@ -135,11 +136,72 @@
         4: "", // Masukkan URL Database Alat Teman ke-4 di sini
         5: ""  // Masukkan URL Database Alat Teman ke-5 di sini
     };
-    
+
+    const OFFLINE_DETIK = 30;                       // data tidak berubah selama ini -> alat dianggap offline
+    const JAM_WAJIB = ["0700", "1400", "2100"];
+    const BATAS = { suhuMin: 19, suhuMax: 24, rhMin: 40, rhMax: 60 };
+
     let currentRoom = 1;
     let myChart = null;
+    let cacheData = { riwayat: null, log: null, siap: false };
+    const lacak = {};   // nomor ruang -> { sig, tUbah }
 
-    // Render 5 Kartu Ruangan
+    // ==== FUNGSI MURNI (mulai) ====
+    const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    function hitungStatus(suhu, rh) {
+        const sOK = suhu >= BATAS.suhuMin && suhu <= BATAS.suhuMax;
+        const rOK = rh >= BATAS.rhMin && rh <= BATAS.rhMax;
+        if (sOK && rOK) return "NORMAL";
+        if (!sOK && rOK) return "SUHU TIDAK NORMAL";
+        if (sOK && !rOK) return "KELEMBABAN TIDAK NORMAL";
+        return "SUHU DAN KELEMBABAN TIDAK NORMAL";
+    }
+
+    // Baris tabel log 07.00 / 14.00 / 21.00.
+    // Prioritas: data dari /log (tersimpan otomatis alat); jika belum ada, pakai /riwayat pada jam yang sama.
+    function bangunBarisLog(logData, riwayatData, bulan) {
+        const baris = [];
+        const semuaTgl = new Set([...Object.keys(logData || {}), ...Object.keys(riwayatData || {})]);
+        [...semuaTgl].sort().forEach(tgl => {
+            if (bulan && !tgl.startsWith(bulan)) return;
+            JAM_WAJIB.forEach(k => {
+                const dariLog = logData && logData[tgl] && logData[tgl][k];
+                const dariRiwayat = riwayatData && riwayatData[tgl] && riwayatData[tgl][k];
+                const d = dariLog || dariRiwayat;
+                if (d && typeof d === "object") baris.push({ tgl, key: k, d });
+            });
+        });
+        return baris;
+    }
+
+    // Data grafik: tanggal terbaru yang ada di riwayat
+    function bangunSeriesGrafik(riwayatData) {
+        const hasil = { labels: [], suhu: [], rh: [], tgl: null };
+        if (!riwayatData) return hasil;
+        const tgls = Object.keys(riwayatData).sort();
+        if (tgls.length === 0) return hasil;
+        const tgl = tgls[tgls.length - 1];
+        const hari = riwayatData[tgl] || {};
+        Object.keys(hari).sort().forEach(k => {
+            const it = hari[k];
+            if (!it || typeof it !== "object") return;
+            const rh = it.kelembaban !== undefined ? it.kelembaban : it.humidity;
+            const suhu = it.suhu !== undefined ? it.suhu : it.temperature;
+            hasil.labels.push(/^\d{4}$/.test(k) ? k.slice(0, 2) + ":" + k.slice(2) : (it.jam || k));
+            hasil.suhu.push(Number(suhu));
+            hasil.rh.push(Number(rh));
+        });
+        hasil.tgl = tgl;
+        return hasil;
+    }
+    // ==== FUNGSI MURNI (selesai) ====
+
+    function fetchJson(url) {
+        return fetch(url).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+    }
+
+    // Render 5 Kartu Ruangan dengan Indikator Jam
     function initCards() {
         const grid = document.getElementById('cardsGrid');
         if (!grid) return;
@@ -150,6 +212,7 @@
                     <h3>Ruang Operasi ${i}</h3>
                     <div class="metric"><span>Suhu:</span> <span class="val" id="card-suhu-${i}">--.- °C</span></div>
                     <div class="metric"><span>Kelembaban:</span> <span class="val" id="card-rh-${i}">--.- %</span></div>
+                    <div class="metric" style="font-size: 11px; color: #64748b; margin-top: 4px;"><span>Jam alat:</span> <span id="card-time-${i}">--:--:--</span></div>
                     <div id="card-status-${i}" class="badge bg-wait">Menunggu...</div>
                 </div>
             `;
@@ -159,16 +222,14 @@
     function selectRoom(roomNum) {
         currentRoom = roomNum;
         document.querySelectorAll('.room-btn').forEach((btn, idx) => {
-            if (idx + 1 === roomNum) btn.classList.add('active');
-            else btn.classList.remove('active');
+            btn.classList.toggle('active', idx + 1 === roomNum);
         });
         document.querySelectorAll('.card').forEach((card, idx) => {
-            if (idx + 1 === roomNum) card.classList.add('active-card');
-            else card.classList.remove('active-card');
+            card.classList.toggle('active-card', idx + 1 === roomNum);
         });
         document.getElementById('chartTitle').innerText = `Grafik Tren 24 Jam - Ruang Operasi ${roomNum}`;
         document.getElementById('tableTitle').innerText = `Log Otomatis (07.00, 14.00, 21.00 WIB) - Ruang Operasi ${roomNum}`;
-        
+
         perbaruiUIAlat();
         ambilDataLive();
     }
@@ -178,7 +239,7 @@
         myChart = new Chart(ctx, {
             type: 'line',
             data: {
-                labels: ['07:00', '14:00', '21:00'],
+                labels: [],
                 datasets: [
                     {
                         label: 'Suhu (°C)',
@@ -187,6 +248,7 @@
                         backgroundColor: 'rgba(253, 126, 20, 0.1)',
                         borderWidth: 2,
                         yAxisID: 'y-suhu',
+                        spanGaps: true,
                         tension: 0.2
                     },
                     {
@@ -196,6 +258,7 @@
                         backgroundColor: 'rgba(13, 202, 240, 0.1)',
                         borderWidth: 2,
                         yAxisID: 'y-rh',
+                        spanGaps: true,
                         tension: 0.2
                     }
                 ]
@@ -212,165 +275,176 @@
         });
     }
 
-    // Ambil Data Live untuk Kartu Status
-    async function ambilDataLive() {
-        let baseUrl = DEVICE_URLS[currentRoom];
+    // ---------- Kartu real-time ----------
+    async function perbaruiKartu(i) {
+        const baseUrl = DEVICE_URLS[i];
+        const suhuEl = document.getElementById(`card-suhu-${i}`);
+        const rhEl = document.getElementById(`card-rh-${i}`);
+        const timeEl = document.getElementById(`card-time-${i}`);
+        const badgeEl = document.getElementById(`card-status-${i}`);
+        if (!suhuEl) return;
+
+        const setBadge = (teks, kelas) => { badgeEl.innerText = teks; badgeEl.className = "badge " + kelas; };
+        const kosong = () => { suhuEl.innerText = "--.- °C"; rhEl.innerText = "--.- %"; };
+
         if (!baseUrl) {
-            document.getElementById(`card-suhu-${currentRoom}`).innerText = `Belum Ada URL`;
-            document.getElementById(`card-rh-${currentRoom}`).innerText = `--.- %`;
-            let badge = document.getElementById(`card-status-${currentRoom}`);
-            badge.innerText = "TIDAK TERHUBUNG";
-            badge.className = "badge bg-wait";
+            kosong();
+            timeEl.innerText = "--:--:--";
+            setBadge("BELUM ADA URL", "bg-wait");
             return;
         }
 
         try {
-            let response = await fetch(baseUrl + "/live.json");
-            let data = await response.json();
+            // Penyesuaian khusus untuk Ruang 4 atau ruangan lain
+            const targetUrl = (i === 4) ? baseUrl + ".json" : baseUrl + "/live.json";
+            const data = await fetchJson(targetUrl);
 
-            if (data && data.suhu !== undefined) {
-                document.getElementById(`card-suhu-${currentRoom}`).innerText = `${data.suhu.toFixed(1)} °C`;
-                document.getElementById(`card-rh-${currentRoom}`).innerText = `${data.kelembaban.toFixed(1)} %`;
-                let badge = document.getElementById(`card-status-${currentRoom}`);
-                badge.innerText = data.status;
-                badge.className = "badge " + (data.status === "NORMAL" ? "bg-ok" : "bg-bad");
+            if (data && (data.suhu !== undefined || data.temperature !== undefined)) {
+                const suhu = Number(data.suhu !== undefined ? data.suhu : data.temperature);
+                const rh = Number(data.kelembaban !== undefined ? data.kelembaban : data.humidity);
+                const status = data.status || hitungStatus(suhu, rh);
+
+                // Deteksi alat mati: isi data tidak berubah (jam alat berhenti bertambah)
+                const adaWaktu = data.jam !== undefined || data.timestamp !== undefined || data.waktu !== undefined;
+                const sig = JSON.stringify(data);
+                const L = lacak[i] || (lacak[i] = { sig: null, tUbah: Date.now() });
+                if (sig !== L.sig) { L.sig = sig; L.tUbah = Date.now(); }
+                const basi = adaWaktu && (Date.now() - L.tUbah) / 1000 > OFFLINE_DETIK;
+
+                suhuEl.innerText = isNaN(suhu) ? "--.- °C" : `${suhu.toFixed(1)} °C`;
+                rhEl.innerText = isNaN(rh) ? "--.- %" : `${rh.toFixed(1)} %`;
+                // Jam yang tampil = jam dari alat (RTC), bukan jam komputer
+                timeEl.innerText = data.jam || data.waktu || new Date(L.tUbah).toTimeString().split(' ')[0];
+
+                if (basi) setBadge("ALAT OFFLINE (data berhenti)", "bg-wait");
+                else setBadge(status, status === "NORMAL" ? "bg-ok" : "bg-bad");
+            } else {
+                // URL valid tapi data kosong (alat belum pernah / tidak mengirim data)
+                kosong();
+                timeEl.innerText = "--:--:--";
+                setBadge("ALAT TIDAK NYALA", "bg-bad");
             }
         } catch (error) {
-            console.error("Gagal mengambil data live alat " + currentRoom, error);
+            kosong();
+            timeEl.innerText = "--:--:--";
+            setBadge("OFFLINE / GAGAL", "bg-bad");
         }
     }
 
-    // Perbarui Grafik dan Riwayat Alat Terpilih
+    async function ambilDataLive() {
+        await Promise.all([1, 2, 3, 4, 5].map(perbaruiKartu));
+    }
+
+    // ---------- Grafik & riwayat alat terpilih ----------
     async function perbaruiUIAlat() {
-        let baseUrl = DEVICE_URLS[currentRoom];
-        let labels = [], suhuArr = [], rhArr = [];
-        
+        const room = currentRoom;
+        const baseUrl = DEVICE_URLS[room];
+        cacheData = { riwayat: null, log: null, siap: false };
+
         if (baseUrl) {
-            try {
-                let res = await fetch(baseUrl + "/riwayat.json");
-                let riwayatData = await res.json();
-
-                if (riwayatData) {
-                    let tglKeys = Object.keys(riwayatData).sort();
-                    if (tglKeys.length > 0) {
-                        let tglTerbaru = tglKeys[tglKeys.length - 1];
-                        let jamData = riwayatData[tglTerbaru];
-                        
-                        Object.keys(jamData).sort().forEach(jamKey => {
-                            let item = jamData[jamKey];
-                            labels.push(item.jam || jamKey);
-                            suhuArr.push(item.suhu);
-                            rhArr.push(item.kelembaban);
-                        });
-                    }
-                }
-                muatDataLog(riwayatData);
-            } catch (e) {
-                console.error("Gagal memuat riwayat", e);
-            }
+            const [riwayat, log] = await Promise.all([
+                fetchJson(baseUrl + "/riwayat.json").catch(e => { console.error("Gagal memuat riwayat", e); return null; }),
+                fetchJson(baseUrl + "/log.json").catch(e => { console.error("Gagal memuat log", e); return null; })
+            ]);
+            if (room !== currentRoom) return;   // pengguna sudah pindah ruangan
+            cacheData = { riwayat, log, siap: true };
         } else {
-            muatDataLog(null);
+            cacheData.siap = true;
         }
-
-        if (myChart) {
-            myChart.data.labels = labels.length > 0 ? labels : ['07:00', '14:00', '21:00'];
-            myChart.data.datasets[0].data = suhuArr;
-            myChart.data.datasets[1].data = rhArr;
-            myChart.update();
-        }
+        renderGrafik();
+        renderLog();
     }
 
-    // Muat Tabel Log Waktu Tertentu (07.00, 14.00, 21.00 WIB)
-    async function muatDataLog(preloadedRiwayat = null) {
-        let bulanPilih = document.getElementById('filterBulan').value;
-        const tbody = document.getElementById('logTableBody');
-        tbody.innerHTML = `<tr><td colspan="6">Memuat data log...</td></tr>`;
+    function renderGrafik() {
+        if (!myChart) return;
+        const g = bangunSeriesGrafik(cacheData.riwayat);
+        myChart.data.labels = g.labels;
+        myChart.data.datasets[0].data = g.suhu;
+        myChart.data.datasets[1].data = g.rh;
+        myChart.update();
+        document.getElementById('chartTitle').innerText =
+            `Grafik Tren 24 Jam - Ruang Operasi ${currentRoom}` + (g.tgl ? ` (${g.tgl})` : "");
+    }
 
-        let baseUrl = DEVICE_URLS[currentRoom];
-        if (!baseUrl) {
+    // ---------- Tabel log 07.00, 14.00, 21.00 ----------
+    function renderLog() {
+        const tbody = document.getElementById('logTableBody');
+        if (!DEVICE_URLS[currentRoom]) {
             tbody.innerHTML = `<tr><td colspan="6">Alat ${currentRoom} belum diatur URL databasenya di sistem web ini.</td></tr>`;
             return;
         }
-
-        try {
-            let riwayatData = preloadedRiwayat;
-            if (!riwayatData) {
-                let res = await fetch(baseUrl + "/riwayat.json");
-                riwayatData = await res.json();
-            }
-
-            tbody.innerHTML = '';
-            let adaData = false;
-            const jamWajib = ["0700", "1400", "2100"];
-
-            if (riwayatData) {
-                Object.keys(riwayatData).sort().forEach(tgl => {
-                    if (bulanPilih && !tgl.startsWith(bulanPilih)) return;
-
-                    let jamMap = riwayatData[tgl];
-                    jamWajib.forEach(targetJam => {
-                        if (jamMap[targetJam]) {
-                            let d = jamMap[targetJam];
-                            adaData = true;
-                            let jamTampil = d.jam || (targetJam.slice(0,2) + ":" + targetJam.slice(2,4) + ":00");
-
-                            let tr = document.createElement('tr');
-                            tr.innerHTML = `
-                                <td>${d.hari || '-'}</td>
-                                <td>${d.tanggal || tgl}</td>
-                                <td>${jamTampil}</td>
-                                <td>${d.suhu !== undefined ? d.suhu.toFixed(1) : '-'}</td>
-                                <td>${d.kelembaban !== undefined ? d.kelembaban.toFixed(1) : '-'}</td>
-                                <td><span style="color: ${d.status === 'NORMAL' ? 'green' : 'red'}; font-weight:bold;">${d.status || '-'}</span></td>
-                            `;
-                            tbody.appendChild(tr);
-                        }
-                    });
-                });
-            }
-
-            if (!adaData) {
-                tbody.innerHTML = `<tr><td colspan="6">Belum ada data otomatis (07.00, 14.00, 21.00) untuk bulan ini.</td></tr>`;
-            }
-        } catch (err) {
-            tbody.innerHTML = `<tr><td colspan="6">Gagal memuat data log.</td></tr>`;
+        if (!cacheData.siap) {
+            tbody.innerHTML = `<tr><td colspan="6">Memuat data log...</td></tr>`;
+            return;
         }
+        const bulanPilih = document.getElementById('filterBulan').value;
+        const baris = bangunBarisLog(cacheData.log, cacheData.riwayat, bulanPilih);
+
+        if (baris.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6">Belum ada data otomatis (07.00, 14.00, 21.00) untuk bulan ini.</td></tr>`;
+            return;
+        }
+        tbody.innerHTML = baris.map(({ tgl, key, d }) => {
+            const jamTampil = d.jam || (key.slice(0, 2) + ":" + key.slice(2, 4) + ":00");
+            const suhu = Number(d.suhu !== undefined ? d.suhu : d.temperature);
+            const rh = Number(d.kelembaban !== undefined ? d.kelembaban : d.humidity);
+            const status = d.status || (isNaN(suhu) || isNaN(rh) ? "-" : hitungStatus(suhu, rh));
+            return `<tr>
+                <td>${esc(d.hari || '-')}</td>
+                <td>${esc(d.tanggal || tgl)}</td>
+                <td>${esc(jamTampil)}</td>
+                <td>${isNaN(suhu) ? '-' : suhu.toFixed(1)}</td>
+                <td>${isNaN(rh) ? '-' : rh.toFixed(1)}</td>
+                <td><span style="color: ${status === 'NORMAL' ? 'green' : 'red'}; font-weight:bold;">${esc(status)}</span></td>
+            </tr>`;
+        }).join('');
     }
 
-    function eksporCSVBulanan() {
-        let rows = document.querySelectorAll("#logTableBody tr");
+    // Unduh Rekap Langsung Menjadi File Excel (.xlsx)
+    function eksporExcelBulanan() {
+        const rows = document.querySelectorAll("#logTableBody tr");
         if (rows.length === 0 || rows[0].innerText.includes("Memuat") || rows[0].innerText.includes("Belum") || rows[0].innerText.includes("belum diatur")) {
             alert("Tidak ada data log untuk diekspor!");
             return;
         }
 
-        let csv = [["Hari", "Tanggal", "Jam", "Suhu (C)", "Kelembaban (%RH)", "Status Ruangan"].join(",")];
+        const dataExcel = [
+            ["Hari", "Tanggal", "Jam", "Suhu (°C)", "Kelembaban (%RH)", "Status Ruangan"]
+        ];
         rows.forEach(row => {
-            let cols = row.querySelectorAll("td");
+            const cols = row.querySelectorAll("td");
             if (cols.length === 6) {
-                csv.push([cols[0].innerText, cols[1].innerText, cols[2].innerText, cols[3].innerText, cols[4].innerText, `"${cols[5].innerText}"`].join(","));
+                const s = parseFloat(cols[3].innerText), h = parseFloat(cols[4].innerText);
+                dataExcel.push([
+                    cols[0].innerText,
+                    cols[1].innerText,
+                    cols[2].innerText,
+                    isNaN(s) ? cols[3].innerText : s,   // angka tetap terbaca sebagai angka di Excel
+                    isNaN(h) ? cols[4].innerText : h,
+                    cols[5].innerText
+                ]);
             }
         });
 
-        let bulanPilih = document.getElementById('filterBulan').value || "Bulanan";
-        let blob = new Blob([csv.join("\n")], { type: 'text/csv;charset=utf-8;' });
-        let link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `Log_Ruang_Operasi_${currentRoom}_${bulanPilih}.csv`;
-        link.click();
+        const wb = XLSX.utils.book_new();
+        const ws = XLSX.utils.aoa_to_sheet(dataExcel);
+        XLSX.utils.book_append_sheet(wb, ws, "Log Rekap");
+
+        const bulanPilih = document.getElementById('filterBulan').value || "Bulanan";
+        XLSX.writeFile(wb, `Log_Ruang_Operasi_${currentRoom}_${bulanPilih}.xlsx`);
     }
 
     function unduhGambarGrafik() {
-        let link = document.createElement('a');
+        const link = document.createElement('a');
         link.download = `Grafik_Ruang_Operasi_${currentRoom}.png`;
         link.href = myChart.toBase64Image();
         link.click();
     }
 
     window.onload = function() {
-        let now = new Date();
-        let yyyy = now.getFullYear();
-        let mm = String(now.getMonth() + 1).padStart(2, '0');
+        const now = new Date();
+        const yyyy = now.getFullYear();
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
         document.getElementById('filterBulan').value = `${yyyy}-${mm}`;
 
         initCards();
@@ -378,7 +452,8 @@
         ambilDataLive();
         perbaruiUIAlat();
 
-        setInterval(ambilDataLive, 5000);
+        setInterval(ambilDataLive, 5000);    // kartu real-time
+        setInterval(perbaruiUIAlat, 60000);  // grafik & log diperbarui tiap 1 menit
     };
 </script>
 
