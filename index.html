@@ -394,7 +394,7 @@
         }).join('');
     }
 
-    // ---------- FUNGSI UTAMA EXCEL + GRAFIK (ExcelJS) ----------
+    // ---------- FUNGSI UTAMA EXCEL + GRAFIK BULANAN (ExcelJS) ----------
     async function eksporExcelBulanan() {
         const rows = document.querySelectorAll("#logTableBody tr");
         if (rows.length === 0 || rows[0].innerText.includes("Memuat") || rows[0].innerText.includes("Belum") || rows[0].innerText.includes("belum diatur")) {
@@ -402,15 +402,45 @@
             return;
         }
 
-        // 1. Buat Workbook menggunakan ExcelJS
+        // 1. Simpan data grafik asli (harian)
+        const originalLabels = [...myChart.data.labels];
+        const originalSuhu = [...myChart.data.datasets[0].data];
+        const originalRh = [...myChart.data.datasets[1].data];
+
+        // 2. Susun data bulanan dari tabel log (07:00, 14:00, 21:00 tiap hari)
+        const labelsBulan = [];
+        const suhuBulan = [];
+        const rhBulan = [];
+        
+        rows.forEach(row => {
+            const cols = row.querySelectorAll("td");
+            if (cols.length === 6) {
+                // Contoh label sumbu X: "11/11 21:00"
+                const tglKoleksi = cols[1].innerText.slice(5); 
+                const jamKoleksi = cols[2].innerText.slice(0, 5);
+                labelsBulan.push(`${tglKoleksi} ${jamKoleksi}`);
+                
+                suhuBulan.push(parseFloat(cols[3].innerText));
+                rhBulan.push(parseFloat(cols[4].innerText));
+            }
+        });
+
+        // Update grafik sementara ke mode tren bulanan
+        myChart.data.labels = labelsBulan;
+        myChart.data.datasets[0].data = suhuBulan;
+        myChart.data.datasets[1].data = rhBulan;
+        myChart.update();
+
+        // Jeda 300ms agar Chart.js selesai merender ulang gambar
+        await new Promise(resolve => setTimeout(resolve, 300));
+
+        // 3. Buat Workbook menggunakan ExcelJS
         const workbook = new ExcelJS.Workbook();
         const sheet = workbook.addWorksheet(`Rekap Ruang ${currentRoom}`);
 
-        // 2. Tambahkan Judul & Header Tabel
         sheet.addRow([`LAPORAN REKAPITULASI BULANAN - RUANG OPERASI ${currentRoom}`]);
         sheet.addRow(["Hari", "Tanggal", "Jam", "Suhu (°C)", "Kelembaban (%RH)", "Status Ruangan"]);
 
-        // 3. Masukkan data tabel baris per baris
         rows.forEach(row => {
             const cols = row.querySelectorAll("td");
             if (cols.length === 6) {
@@ -427,7 +457,7 @@
             }
         });
 
-        // 4. Ambil gambar grafik dari elemen Canvas di layar & tempel ke Excel
+        // 4. Ambil gambar grafik yang sudah memuat data bulanan berkelanjutan
         const canvasEl = document.getElementById('sensorChart');
         if (canvasEl && myChart) {
             const base64Image = canvasEl.toDataURL('image/png');
@@ -437,45 +467,19 @@
                 extension: 'png',
             });
 
-            // Sisipkan gambar grafik ke sebelah kanan tabel data (di Kolom H, Baris 2)
+            // Tempel gambar di samping tabel (Kolom H, Baris 2)
             sheet.addImage(imageId, {
                 tl: { col: 7, row: 1 }, 
-                ext: { width: 500, height: 280 } 
+                ext: { width: 600, height: 320 } 
             });
         }
 
-        // 5. Proses dan download file Excel (.xlsx)
+        // 5. Kembalikan grafik di layar ke kondisi awal (harian)
+        myChart.data.labels = originalLabels;
+        myChart.data.datasets[0].data = originalSuhu;
+        myChart.data.datasets[1].data = originalRh;
+        myChart.update();
+
+        // 6. Unduh file Excel (.xlsx)
         const buffer = await workbook.xlsx.writeBuffer();
-        const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-        const link = document.createElement('a');
-        link.href = window.URL.createObjectURL(blob);
-        const bulanPilih = document.getElementById('filterBulan').value || "Bulanan";
-        link.download = `Laporan_Dan_Grafik_Ruang_${currentRoom}_${bulanPilih}.xlsx`;
-        link.click();
-    }
-
-    function unduhGambarGrafik() {
-        const link = document.createElement('a');
-        link.download = `Grafik_Ruang_Operasi_${currentRoom}.png`;
-        link.href = myChart.toBase64Image();
-        link.click();
-    }
-
-    window.onload = function() {
-        const now = new Date();
-        const yyyy = now.getFullYear();
-        const mm = String(now.getMonth() + 1).padStart(2, '0');
-        document.getElementById('filterBulan').value = `${yyyy}-${mm}`;
-
-        initCards();
-        initChart();
-        ambilDataLive();
-        perbaruiUIAlat();
-
-        setInterval(ambilDataLive, 5000);    
-        setInterval(perbaruiUIAlat, 60000);  
-    };
-</script>
-
-</body>
-</html>
+        const blob =
