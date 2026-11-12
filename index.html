@@ -129,11 +129,11 @@
 </div>
 
 <script>
-    // Konfigurasi URL Database Masing-masing Alat
+    // Konfigurasi URL Database Masing-masing Alat (Bisa Cloud Firebase/Railway ataupun IP Lokal http://...)
     const DEVICE_URLS = {
         1: "https://monitoring-ruang-operasi-af3ff-default-rtdb.asia-southeast1.firebasedatabase.app/monitoring", 
         2: "https://monitoring-ruang-ok-production.up.railway.app/api/data", 
-        3: "", 
+        3: "", // Masukkan IP alat teman jika pakai IP Lokal (contoh: "http://192.168.1.50")
         4: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp04", 
         5: ""  
     };
@@ -292,194 +292,12 @@
 
         try {
             let targetUrl = baseUrl;
-            if (!baseUrl.includes("railway.app")) {
+            if (baseUrl.startsWith("http://") || (baseUrl.startsWith("https://") && !baseUrl.includes("firebase") && !baseUrl.includes("railway"))) {
+                targetUrl = baseUrl;
+            } else if (!baseUrl.includes("railway.app")) {
                 targetUrl = (i === 4) ? baseUrl + ".json" : baseUrl + "/live.json";
             }
             
             const data = await fetchJson(targetUrl);
 
-            if (data && (data.suhu !== undefined || data.temperature !== undefined)) {
-                const suhu = Number(data.suhu !== undefined ? data.suhu : data.temperature);
-                const rh = Number(data.kelembaban !== undefined ? data.kelembaban : data.humidity);
-                const status = data.status || hitungStatus(suhu, rh);
-
-                const adaWaktu = data.jam !== undefined || data.timestamp !== undefined || data.waktu !== undefined;
-                const sig = JSON.stringify(data);
-                const L = lacak[i] || (lacak[i] = { sig: null, tUbah: Date.now() });
-                if (sig !== L.sig) { L.sig = sig; L.tUbah = Date.now(); }
-                const basi = adaWaktu && (Date.now() - L.tUbah) / 1000 > OFFLINE_DETIK;
-
-                suhuEl.innerText = isNaN(suhu) ? "--.- °C" : `${suhu.toFixed(1)} °C`;
-                rhEl.innerText = isNaN(rh) ? "--.- %" : `${rh.toFixed(1)} %`;
-                timeEl.innerText = data.jam || data.waktu || new Date(L.tUbah).toTimeString().split(' ')[0];
-
-                if (basi) setBadge("ALAT OFFLINE (data berhenti)", "bg-wait");
-                else setBadge(status, status === "NORMAL" ? "bg-ok" : "bg-bad");
-            } else {
-                kosong();
-                timeEl.innerText = "--:--:--";
-                setBadge("ALAT TIDAK NYALA", "bg-bad");
-            }
-        } catch (error) {
-            kosong();
-            timeEl.innerText = "--:--:--";
-            setBadge("OFFLINE / GAGAL", "bg-bad");
-        }
-    }
-
-    async function ambilDataLive() {
-        await Promise.all([1, 2, 3, 4, 5].map(perbaruiKartu));
-    }
-
-    async function perbaruiUIAlat() {
-        const room = currentRoom;
-        const baseUrl = DEVICE_URLS[room];
-        cacheData = { riwayat: null, log: null, siap: false };
-
-        if (baseUrl) {
-            const [riwayat, log] = await Promise.all([
-                fetchJson(baseUrl + "/riwayat.json").catch(e => { console.error("Gagal memuat riwayat", e); return null; }),
-                fetchJson(baseUrl + "/log.json").catch(e => { console.error("Gagal memuat log", e); return null; })
-            ]);
-            if (room !== currentRoom) return;   
-            cacheData = { riwayat, log, siap: true };
-        } else {
-            cacheData.siap = true;
-        }
-        renderGrafik();
-        renderLog();
-    }
-
-    function renderGrafik() {
-        if (!myChart) return;
-        const g = bangunSeriesGrafik(cacheData.riwayat);
-        myChart.data.labels = g.labels;
-        myChart.data.datasets[0].data = g.suhu;
-        myChart.data.datasets[1].data = g.rh;
-        myChart.update();
-        document.getElementById('chartTitle').innerText =
-            `Grafik Tren 24 Jam - Ruang Operasi ${currentRoom}` + (g.tgl ? ` (${g.tgl})` : "");
-    }
-
-    function renderLog() {
-        const tbody = document.getElementById('logTableBody');
-        if (!DEVICE_URLS[currentRoom]) {
-            tbody.innerHTML = `<tr><td colspan="6">Alat ${currentRoom} belum diatur URL databasenya di sistem web ini.</td></tr>`;
-            return;
-        }
-        if (!cacheData.siap) {
-            tbody.innerHTML = `<tr><td colspan="6">Memuat data log...</td></tr>`;
-            return;
-        }
-        const bulanPilih = document.getElementById('filterBulan').value;
-        const baris = bangunBarisLog(cacheData.log, cacheData.riwayat, bulanPilih);
-
-        if (baris.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6">Belum ada data otomatis (07.00, 14.00, 21.00) untuk bulan ini.</td></tr>`;
-            return;
-        }
-        tbody.innerHTML = baris.map(({ tgl, key, d }) => {
-            const jamTampil = d.jam || (key.slice(0, 2) + ":" + key.slice(2, 4) + ":00");
-            const suhu = Number(d.suhu !== undefined ? d.suhu : d.temperature);
-            const rh = Number(d.kelembaban !== undefined ? d.kelembaban : d.humidity);
-            const status = d.status || (isNaN(suhu) || isNaN(rh) ? "-" : hitungStatus(suhu, rh));
-            return `<tr>
-                <td>${esc(d.hari || '-')}</td>
-                <td>${esc(d.tanggal || tgl)}</td>
-                <td>${esc(jamTampil)}</td>
-                <td>${isNaN(suhu) ? '-' : suhu.toFixed(1)}</td>
-                <td>${isNaN(rh) ? '-' : rh.toFixed(1)}</td>
-                <td><span style="color: ${status === 'NORMAL' ? 'green' : 'red'}; font-weight:bold;">${esc(status)}</span></td>
-            </tr>`;
-        }).join('');
-    }
-
-    // ---------- FUNGSI UTAMA EXCEL + GRAFIK BULANAN (ExcelJS) ----------
-    async function eksporExcelBulanan() {
-        const rows = document.querySelectorAll("#logTableBody tr");
-        if (rows.length === 0 || rows[0].innerText.includes("Memuat") || rows[0].innerText.includes("Belum") || rows[0].innerText.includes("belum diatur")) {
-            alert("Tidak ada data log untuk diekspor!");
-            return;
-        }
-
-        // 1. Simpan data grafik asli (harian)
-        const originalLabels = [...myChart.data.labels];
-        const originalSuhu = [...myChart.data.datasets[0].data];
-        const originalRh = [...myChart.data.datasets[1].data];
-
-        // 2. Susun data bulanan dari tabel log (07:00, 14:00, 21:00 tiap hari)
-        const labelsBulan = [];
-        const suhuBulan = [];
-        const rhBulan = [];
-        
-        rows.forEach(row => {
-            const cols = row.querySelectorAll("td");
-            if (cols.length === 6) {
-                // Contoh label sumbu X: "11/11 21:00"
-                const tglKoleksi = cols[1].innerText.slice(5); 
-                const jamKoleksi = cols[2].innerText.slice(0, 5);
-                labelsBulan.push(`${tglKoleksi} ${jamKoleksi}`);
-                
-                suhuBulan.push(parseFloat(cols[3].innerText));
-                rhBulan.push(parseFloat(cols[4].innerText));
-            }
-        });
-
-        // Update grafik sementara ke mode tren bulanan
-        myChart.data.labels = labelsBulan;
-        myChart.data.datasets[0].data = suhuBulan;
-        myChart.data.datasets[1].data = rhBulan;
-        myChart.update();
-
-        // Jeda 300ms agar Chart.js selesai merender ulang gambar
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-        // 3. Buat Workbook menggunakan ExcelJS
-        const workbook = new ExcelJS.Workbook();
-        const sheet = workbook.addWorksheet(`Rekap Ruang ${currentRoom}`);
-
-        sheet.addRow([`LAPORAN REKAPITULASI BULANAN - RUANG OPERASI ${currentRoom}`]);
-        sheet.addRow(["Hari", "Tanggal", "Jam", "Suhu (°C)", "Kelembaban (%RH)", "Status Ruangan"]);
-
-        rows.forEach(row => {
-            const cols = row.querySelectorAll("td");
-            if (cols.length === 6) {
-                const s = parseFloat(cols[3].innerText);
-                const h = parseFloat(cols[4].innerText);
-                sheet.addRow([
-                    cols[0].innerText,
-                    cols[1].innerText,
-                    cols[2].innerText,
-                    isNaN(s) ? cols[3].innerText : s,
-                    isNaN(h) ? cols[4].innerText : h,
-                    cols[5].innerText
-                ]);
-            }
-        });
-
-        // 4. Ambil gambar grafik yang sudah memuat data bulanan berkelanjutan
-        const canvasEl = document.getElementById('sensorChart');
-        if (canvasEl && myChart) {
-            const base64Image = canvasEl.toDataURL('image/png');
-            
-            const imageId = workbook.addImage({
-                base64: base64Image,
-                extension: 'png',
-            });
-
-            // Tempel gambar di samping tabel (Kolom H, Baris 2)
-            sheet.addImage(imageId, {
-                tl: { col: 7, row: 1 }, 
-                ext: { width: 600, height: 320 } 
-            });
-        }
-
-        // 5. Kembalikan grafik di layar ke kondisi awal (harian)
-        myChart.data.labels = originalLabels;
-        myChart.data.datasets[0].data = originalSuhu;
-        myChart.data.datasets[1].data = originalRh;
-        myChart.update();
-
-        // 6. Unduh file Excel (.xlsx)
-        const buffer = await workbook.xlsx.writeBuffer();
-        const blob =
+            if (data && (data.suhu !== undefined || data.temperature !== undefined))
