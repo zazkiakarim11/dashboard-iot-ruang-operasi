@@ -47,6 +47,10 @@
         .bg-ok { background-color: var(--success); }
         .bg-bad { background-color: var(--danger); }
         .bg-wait { background-color: #6c757d; }
+        .local-access-panel { margin-top: 7px; text-align: center; }
+        .local-connect-btn { border: 0; border-radius: 5px; padding: 6px 9px; background: #0d6efd; color: #fff; font-size: 10px; font-weight: 600; cursor: pointer; width: 100%; }
+        .local-connect-btn:disabled { background: #198754; cursor: default; opacity: 0.9; }
+        .local-access-note { display: block; margin-top: 4px; color: #64748b; font-size: 10px; line-height: 1.35; }
 
         .detail-section { background: var(--card-bg); border-radius: 10px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 25px; }
         .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; flex-wrap: wrap; gap: 10px; border-bottom: 2px solid #f1f5f9; padding-bottom: 10px; }
@@ -145,6 +149,108 @@
     let myChart = null;
     let cacheData = { riwayat: null, log: null, siap: false };
 
+    // Akses ke IP lokal dari GitHub Pages memerlukan izin Local Network Access di browser.
+    let localAccessGranted = false;
+    let localNetworkPermission = "prompt";
+    let localPermissionStatus = null;
+
+    function isLocalDeviceRoom(roomNum) {
+        const url = DEVICE_URLS[roomNum] || "";
+        try {
+            const host = new URL(url).hostname;
+            return /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.)/.test(host);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function updateLocalAccessUI() {
+        const btn = document.getElementById("localConnectBtn");
+        const note = document.getElementById("localAccessNote");
+        if (!btn || !note) return;
+
+        if (localAccessGranted) {
+            btn.textContent = "Akses IP Lokal Diizinkan";
+            btn.disabled = true;
+            note.textContent = "Ruang Operasi 3 akan mencoba memperbarui data secara otomatis.";
+        } else if (localNetworkPermission === "denied") {
+            btn.textContent = "Izin IP Lokal Ditolak";
+            btn.disabled = true;
+            note.textContent = "Buka ikon pengaturan situs di samping alamat web, izinkan Local Network, lalu muat ulang halaman.";
+        } else {
+            btn.textContent = "Izinkan Akses IP Lokal";
+            btn.disabled = false;
+            note.textContent = "Klik untuk mengizinkan dashboard online mengakses ESP32 di jaringan lokal.";
+        }
+    }
+
+    async function checkLocalNetworkPermission() {
+        if (!isLocalDeviceRoom(3) || !navigator.permissions || !navigator.permissions.query) {
+            updateLocalAccessUI();
+            return;
+        }
+        try {
+            localPermissionStatus = await navigator.permissions.query({ name: "local-network" });
+            localNetworkPermission = localPermissionStatus.state;
+            localAccessGranted = localNetworkPermission === "granted";
+            localPermissionStatus.addEventListener("change", () => {
+                localNetworkPermission = localPermissionStatus.state;
+                localAccessGranted = localNetworkPermission === "granted";
+                updateLocalAccessUI();
+                if (localAccessGranted) ambilDataLive();
+            });
+        } catch (e) {
+            // Browser yang belum mendukung nama izin ini tetap dapat mencoba melalui tombol.
+            localNetworkPermission = "prompt";
+            localAccessGranted = false;
+        }
+        updateLocalAccessUI();
+    }
+
+    async function hubungkanIPLokal(event) {
+        if (event) event.stopPropagation();
+        if (!isLocalDeviceRoom(3)) return;
+        const btn = document.getElementById("localConnectBtn");
+        const note = document.getElementById("localAccessNote");
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Menghubungkan...";
+        }
+        if (note) note.textContent = "Meminta izin browser dan menghubungi ESP32...";
+
+        try {
+            // Fetch pertama sengaja dipanggil langsung dari klik pengguna agar Chrome dapat menampilkan prompt izin.
+            await fetchJson(DEVICE_URLS[3], {
+                mode: "cors",
+                cache: "no-store",
+                targetAddressSpace: "local"
+            });
+            localAccessGranted = true;
+            localNetworkPermission = "granted";
+            updateLocalAccessUI();
+            selectRoom(3);
+        } catch (error) {
+            console.error("Gagal menghubungkan IP lokal Ruang Operasi 3:", error);
+            // Jika izin sudah diberikan tetapi perangkat tidak menjawab, polling tetap boleh mencoba lagi.
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    localPermissionStatus = await navigator.permissions.query({ name: "local-network" });
+                    localNetworkPermission = localPermissionStatus.state;
+                    localAccessGranted = localNetworkPermission === "granted";
+                }
+            } catch (e) { /* Izin tidak dapat diperiksa di browser ini. */ }
+            updateLocalAccessUI();
+            const badge = document.getElementById("card-status-3");
+            if (badge) {
+                badge.textContent = localAccessGranted ? "IP DIIZINKAN, CEK ALAT" : "IZIN / KONEKSI GAGAL";
+                badge.className = "badge bg-bad";
+            }
+            if (note && localNetworkPermission !== "denied") {
+                note.textContent = "Belum berhasil mengambil data. Pastikan ESP32 aktif, IP benar, dan laptop berada di jaringan yang dapat menjangkaunya.";
+            }
+        }
+    }
+
     const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
     function hitungStatus(suhu, rh) {
@@ -193,10 +299,10 @@
     }
 
     // --- REVISI DI SINI ---
-    function fetchJson(url) {
-        return fetch(url, { mode: 'cors' }).then(r => { 
-            if (!r.ok) throw new Error("HTTP " + r.status); 
-            return r.json(); 
+    function fetchJson(url, options = {}) {
+        return fetch(url, { mode: "cors", ...options }).then(r => {
+            if (!r.ok) throw new Error("HTTP " + r.status);
+            return r.json();
         });
     }
 
@@ -212,6 +318,12 @@
                     <div class="metric"><span>Kelembaban:</span> <span class="val" id="card-rh-${i}">--.- %</span></div>
                     <div class="metric" style="font-size: 11px; color: #64748b; margin-top: 4px;"><span>Jam alat:</span> <span id="card-time-${i}">--:--:--</span></div>
                     <div id="card-status-${i}" class="badge bg-wait">Menunggu...</div>
+                    ${isLocalDeviceRoom(i) ? `
+                        <div class="local-access-panel">
+                            <button type="button" class="local-connect-btn" id="localConnectBtn" onclick="hubungkanIPLokal(event)">Izinkan Akses IP Lokal</button>
+                            <small class="local-access-note" id="localAccessNote">Klik untuk mengizinkan akses ke ESP32 lokal.</small>
+                        </div>
+                    ` : ""}
                 </div>
             `;
         }
@@ -291,9 +403,18 @@
             return;
         }
 
+        if (isLocalDeviceRoom(i) && !localAccessGranted) {
+            kosong();
+            timeEl.innerText = "--:--:--";
+            setBadge(localNetworkPermission === "denied" ? "IZIN IP LOKAL DITOLAK" : "IZINKAN AKSES IP LOKAL", "bg-wait");
+            return;
+        }
+
         try {
             let data = null;
-            if (baseUrl.startsWith("http://") || (baseUrl.startsWith("https://") && !baseUrl.includes("firebase") && !baseUrl.includes("railway"))) {
+            if (isLocalDeviceRoom(i)) {
+                data = await fetchJson(baseUrl, { cache: "no-store", targetAddressSpace: "local" });
+            } else if (baseUrl.startsWith("http://") || (baseUrl.startsWith("https://") && !baseUrl.includes("firebase") && !baseUrl.includes("railway"))) {
                 data = await fetchJson(baseUrl);
             } else if (baseUrl.includes("railway.app")) {
                 data = await fetchJson(baseUrl);
@@ -348,9 +469,10 @@
                 setBadge("ALAT TIDAK NYALA", "bg-bad");
             }
         } catch (error) {
+            console.error(`Gagal membaca Ruang Operasi ${i}:`, error);
             kosong();
             timeEl.innerText = "--:--:--";
-            setBadge("OFFLINE / GAGAL", "bg-bad");
+            setBadge(isLocalDeviceRoom(i) ? "IP LOKAL OFFLINE / GAGAL" : "OFFLINE / GAGAL", "bg-bad");
         }
     }
 
@@ -364,14 +486,22 @@
         cacheData = { riwayat: null, log: null, siap: false };
 
         if (baseUrl) {
+            if (isLocalDeviceRoom(room) && !localAccessGranted) {
+                cacheData = { riwayat: null, log: null, siap: true };
+                renderGrafik();
+                renderLog();
+                return;
+            }
+
             const cleanUrl = baseUrl.replace(/\/+$/, "");
             let isDirectIp = cleanUrl.startsWith("http://") || (cleanUrl.startsWith("https://") && !cleanUrl.includes("firebase") && !cleanUrl.includes("railway"));
             let urlRiwayat = isDirectIp ? cleanUrl : cleanUrl + "/riwayat.json";
             let urlLog = isDirectIp ? null : cleanUrl + "/log.json";
+            const localOptions = isLocalDeviceRoom(room) ? { cache: "no-store", targetAddressSpace: "local" } : {};
 
             const [riwayat, log] = await Promise.all([
-                fetchJson(urlRiwayat).catch(e => { console.error("Gagal memuat riwayat", e); return null; }),
-                urlLog ? fetchJson(urlLog).catch(e => { console.error("Gagal memuat log", e); return null; }) : null
+                fetchJson(urlRiwayat, localOptions).catch(e => { console.error("Gagal memuat riwayat", e); return null; }),
+                urlLog ? fetchJson(urlLog, localOptions).catch(e => { console.error("Gagal memuat log", e); return null; }) : null
             ]);
             if (room !== currentRoom) return;   
             cacheData = { riwayat, log, siap: true };
@@ -520,7 +650,7 @@
         link.click();
     }
 
-    window.onload = function() {
+    window.onload = async function() {
         const now = new Date();
         const yyyy = now.getFullYear();
         const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -528,11 +658,12 @@
 
         initCards();
         initChart();
+        await checkLocalNetworkPermission();
         ambilDataLive();
         perbaruiUIAlat();
 
-        setInterval(ambilDataLive, 5000);    
-        setInterval(perbaruiUIAlat, 60000);  
+        setInterval(ambilDataLive, 5000);
+        setInterval(perbaruiUIAlat, 60000);
     };
 </script>
 
