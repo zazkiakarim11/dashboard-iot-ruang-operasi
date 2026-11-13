@@ -133,8 +133,8 @@
         1: "https://monitoring-ruang-operasi-af3ff-default-rtdb.asia-southeast1.firebasedatabase.app/monitoring", 
         2: "https://monitoring-ruang-ok-production.up.railway.app/api/data", 
         3: "http://10.220.13.197/data", // <-- Masukkan IP / URL alat temanmu di sini jika ingin pakai slot 3
-        4: "http://10.220.14.135:5000/api", 
-        5: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp01"  
+        4: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp01", 
+        5: ""  
     };
 
     const OFFLINE_DETIK = 30;                      
@@ -191,8 +191,12 @@
         return hasil;
     }
 
+    // --- REVISI DI SINI ---
     function fetchJson(url) {
-        return fetch(url).then(r => { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); });
+        return fetch(url, { mode: 'cors' }).then(r => { 
+            if (!r.ok) throw new Error("HTTP " + r.status); 
+            return r.json(); 
+        });
     }
 
     function initCards() {
@@ -289,12 +293,10 @@
         try {
             let data = null;
             if (baseUrl.startsWith("http://") || (baseUrl.startsWith("https://") && !baseUrl.includes("firebase") && !baseUrl.includes("railway"))) {
-                // Jika berupa IP lokal (contoh: http://192.168.1.50) atau endpoint JSON langsung
                 data = await fetchJson(baseUrl);
             } else if (baseUrl.includes("railway.app")) {
                 data = await fetchJson(baseUrl);
             } else {
-                // Untuk Firebase: coba /live.json dulu, jika null coba langsung .json
                 const cleanUrl = baseUrl.replace(/\/+$/, "");
                 data = await fetchJson(cleanUrl + "/live.json").catch(() => null);
                 if (!data || (data.suhu === undefined && data.temperature === undefined)) {
@@ -311,7 +313,6 @@
                 rhEl.innerText = isNaN(rh) ? "--.- %" : `${rh.toFixed(1)} %`;
                 timeEl.innerText = data.jam || data.waktu || "--:--:--";
 
-                // Pengecekan offline akurat berbasis waktu nyata alat vs sistem
                 let basi = false;
                 if (data.timestamp) {
                     const selisihDetik = Math.floor(Date.now() / 1000) - Number(data.timestamp);
