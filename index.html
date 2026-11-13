@@ -181,7 +181,8 @@
         Object.keys(hari).sort().forEach(k => {
             const it = hari[k];
             if (!it || typeof it !== "object") return;
-            const rh = it.kelembaban !== undefined ? it.kelembaban : it.humidity;
+            const rh = it.kelembaban !== undefined ? it.kelembaban :
+                       it.kelembapan !== undefined ? it.kelembapan : it.humidity;
             const suhu = it.suhu !== undefined ? it.suhu : it.temperature;
             hasil.labels.push(/^\d{4}$/.test(k) ? k.slice(0, 2) + ":" + k.slice(2) : (it.jam || k));
             hasil.suhu.push(Number(suhu));
@@ -306,22 +307,25 @@
 
             if (data && (data.suhu !== undefined || data.temperature !== undefined)) {
                 const suhu = Number(data.suhu !== undefined ? data.suhu : data.temperature);
-                const rh = Number(data.kelembaban !== undefined ? data.kelembaban : data.humidity);
+                const nilaiRH = data.kelembaban !== undefined ? data.kelembaban :
+                                data.kelembapan !== undefined ? data.kelembapan : data.humidity;
+                const rh = Number(nilaiRH);
                 const status = data.status || hitungStatus(suhu, rh);
 
                 suhuEl.innerText = isNaN(suhu) ? "--.- °C" : `${suhu.toFixed(1)} °C`;
                 rhEl.innerText = isNaN(rh) ? "--.- %" : `${rh.toFixed(1)} %`;
                 timeEl.innerText = data.jam || data.waktu || "--:--:--";
 
-                let basi = false;
+                // Hormati indikator online/offline yang dikirim langsung oleh API.
+                let basi = data.is_online === false;
                 if (data.timestamp) {
                     const selisihDetik = Math.floor(Date.now() / 1000) - Number(data.timestamp);
-                    basi = selisihDetik > OFFLINE_DETIK;
+                    basi = basi || selisihDetik > OFFLINE_DETIK;
                 } else if (data.tanggal && data.jam) {
                     const waktuAlat = new Date(`${data.tanggal}T${data.jam}`).getTime();
                     if (!isNaN(waktuAlat)) {
                         const selisihDetik = (Date.now() - waktuAlat) / 1000;
-                        basi = selisihDetik > OFFLINE_DETIK;
+                        basi = basi || selisihDetik > OFFLINE_DETIK;
                     }
                 } else if (data.jam) {
                     const sekarang = new Date();
@@ -409,7 +413,9 @@
         tbody.innerHTML = baris.map(({ tgl, key, d }) => {
             const jamTampil = d.jam || (key.slice(0, 2) + ":" + key.slice(2, 4) + ":00");
             const suhu = Number(d.suhu !== undefined ? d.suhu : d.temperature);
-            const rh = Number(d.kelembaban !== undefined ? d.kelembaban : d.humidity);
+            const nilaiRH = d.kelembaban !== undefined ? d.kelembaban :
+                            d.kelembapan !== undefined ? d.kelembapan : d.humidity;
+            const rh = Number(nilaiRH);
             const status = d.status || (isNaN(suhu) || isNaN(rh) ? "-" : hitungStatus(suhu, rh));
             return `<tr>
                 <td>${esc(d.hari || '-')}</td>
