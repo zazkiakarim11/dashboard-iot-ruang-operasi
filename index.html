@@ -132,7 +132,7 @@
     const DEVICE_URLS = {
         1: "https://monitoring-ruang-operasi-af3ff-default-rtdb.asia-southeast1.firebasedatabase.app/monitoring", 
         2: "https://monitoring-ruang-ok-production.up.railway.app/api/data", 
-        3: "", // <-- Masukkan IP / URL alat temanmu di sini (misal Ruang Operasi 3)
+        3: "", // <-- Masukkan IP / URL alat temanmu di sini jika ingin pakai slot 3
         4: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp01", 
         5: ""  
     };
@@ -144,7 +144,6 @@
     let currentRoom = 1;
     let myChart = null;
     let cacheData = { riwayat: null, log: null, siap: false };
-    const lacak = {};   
 
     const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -288,32 +287,56 @@
         }
 
         try {
-            let targetUrl = baseUrl;
+            let data = null;
             if (baseUrl.startsWith("http://") || (baseUrl.startsWith("https://") && !baseUrl.includes("firebase") && !baseUrl.includes("railway"))) {
-                targetUrl = baseUrl;
-            } else if (!baseUrl.includes("railway.app")) {
-                targetUrl = (i === 4) ? baseUrl + ".json" : baseUrl + "/live.json";
+                // Jika berupa IP lokal (contoh: http://192.168.1.50) atau endpoint JSON langsung
+                data = await fetchJson(baseUrl);
+            } else if (baseUrl.includes("railway.app")) {
+                data = await fetchJson(baseUrl);
+            } else {
+                // Untuk Firebase: coba /live.json dulu, jika null coba langsung .json
+                const cleanUrl = baseUrl.replace(/\/+$/, "");
+                data = await fetchJson(cleanUrl + "/live.json").catch(() => null);
+                if (!data || (data.suhu === undefined && data.temperature === undefined)) {
+                    data = await fetchJson(cleanUrl + ".json");
+                }
             }
-            
-            const data = await fetchJson(targetUrl);
 
             if (data && (data.suhu !== undefined || data.temperature !== undefined)) {
                 const suhu = Number(data.suhu !== undefined ? data.suhu : data.temperature);
                 const rh = Number(data.kelembaban !== undefined ? data.kelembaban : data.humidity);
                 const status = data.status || hitungStatus(suhu, rh);
 
-                const adaWaktu = data.jam !== undefined || data.timestamp !== undefined || data.waktu !== undefined;
-                const sig = JSON.stringify(data);
-                const L = lacak[i] || (lacak[i] = { sig: null, tUbah: Date.now() });
-                if (sig !== L.sig) { L.sig = sig; L.tUbah = Date.now(); }
-                const basi = adaWaktu && (Date.now() - L.tUbah) / 1000 > OFFLINE_DETIK;
-
                 suhuEl.innerText = isNaN(suhu) ? "--.- °C" : `${suhu.toFixed(1)} °C`;
                 rhEl.innerText = isNaN(rh) ? "--.- %" : `${rh.toFixed(1)} %`;
-                timeEl.innerText = data.jam || data.waktu || new Date(L.tUbah).toTimeString().split(' ')[0];
+                timeEl.innerText = data.jam || data.waktu || "--:--:--";
 
-                if (basi) setBadge("ALAT OFFLINE (data berhenti)", "bg-wait");
-                else setBadge(status, status === "NORMAL" ? "bg-ok" : "bg-bad");
+                // Pengecekan offline akurat berbasis waktu nyata alat vs sistem
+                let basi = false;
+                if (data.timestamp) {
+                    const selisihDetik = Math.floor(Date.now() / 1000) - Number(data.timestamp);
+                    basi = selisihDetik > OFFLINE_DETIK;
+                } else if (data.tanggal && data.jam) {
+                    const waktuAlat = new Date(`${data.tanggal}T${data.jam}`).getTime();
+                    if (!isNaN(waktuAlat)) {
+                        const selisihDetik = (Date.now() - waktuAlat) / 1000;
+                        basi = selisihDetik > OFFLINE_DETIK;
+                    }
+                } else if (data.jam) {
+                    const sekarang = new Date();
+                    const [h, m, s] = data.jam.split(':').map(Number);
+                    const waktuAlat = new Date(sekarang.getFullYear(), sekarang.getMonth(), sekarang.getDate(), h, m, s || 0).getTime();
+                    const selisihDetik = (Date.now() - waktuAlat) / 1000;
+                    if (selisihDetik > OFFLINE_DETIK || selisihDetik < -300) {
+                        basi = true;
+                    }
+                }
+
+                if (basi) {
+                    setBadge("ALAT OFFLINE (data berhenti)", "bg-wait");
+                } else {
+                    setBadge(status, status === "NORMAL" ? "bg-ok" : "bg-bad");
+                }
             } else {
                 kosong();
                 timeEl.innerText = "--:--:--";
@@ -336,8 +359,10 @@
         cacheData = { riwayat: null, log: null, siap: false };
 
         if (baseUrl) {
-            let urlRiwayat = baseUrl.startsWith("http") && !baseUrl.includes("firebase") && !baseUrl.includes("railway") ? baseUrl : baseUrl + "/riwayat.json";
-            let urlLog = baseUrl.startsWith("http") && !baseUrl.includes("firebase") && !baseUrl.includes("railway") ? null : baseUrl + "/log.json";
+            const cleanUrl = baseUrl.replace(/\/+$/, "");
+            let isDirectIp = cleanUrl.startsWith("http://") || (cleanUrl.startsWith("https://") && !cleanUrl.includes("firebase") && !cleanUrl.includes("railway"));
+            let urlRiwayat = isDirectIp ? cleanUrl : cleanUrl + "/riwayat.json";
+            let urlLog = isDirectIp ? null : cleanUrl + "/log.json";
 
             const [riwayat, log] = await Promise.all([
                 fetchJson(urlRiwayat).catch(e => { console.error("Gagal memuat riwayat", e); return null; }),
