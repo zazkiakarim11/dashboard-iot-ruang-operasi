@@ -138,7 +138,7 @@
         2: "https://monitoring-ruang-ok-production.up.railway.app/api/data", 
         3: "http://10.220.15.230/data", // <-- Masukkan IP / URL alat temanmu di sini jika ingin pakai slot 3
         4: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp01", 
-        5: ""  
+        5: "http://10.220.15.228/data"  // IP ESP32 Ruang Operasi 5
     };
 
     const OFFLINE_DETIK = 30;                      
@@ -172,7 +172,7 @@
         if (localAccessGranted) {
             btn.textContent = "Akses IP Lokal Diizinkan";
             btn.disabled = true;
-            note.textContent = "Ruang Operasi 3 akan mencoba memperbarui data secara otomatis.";
+            note.textContent = "Ruang Operasi 3 akan mencoba memperbarui data dari IP lokal secara otomatis.";
         } else if (localNetworkPermission === "denied") {
             btn.textContent = "Izin IP Lokal Ditolak";
             btn.disabled = true;
@@ -318,12 +318,6 @@
                     <div class="metric"><span>Kelembaban:</span> <span class="val" id="card-rh-${i}">--.- %</span></div>
                     <div class="metric" style="font-size: 11px; color: #64748b; margin-top: 4px;"><span>Jam alat:</span> <span id="card-time-${i}">--:--:--</span></div>
                     <div id="card-status-${i}" class="badge bg-wait">Menunggu...</div>
-                    ${isLocalDeviceRoom(i) ? `
-                        <div class="local-access-panel">
-                            <button type="button" class="local-connect-btn" id="localConnectBtn" onclick="hubungkanIPLokal(event)">Izinkan Akses IP Lokal</button>
-                            <small class="local-access-note" id="localAccessNote">Klik untuk mengizinkan akses ke ESP32 lokal.</small>
-                        </div>
-                    ` : ""}
                 </div>
             `;
         }
@@ -426,24 +420,35 @@
                 }
             }
 
-            if (data && (data.suhu !== undefined || data.temperature !== undefined)) {
-                const suhu = Number(data.suhu !== undefined ? data.suhu : data.temperature);
-                const nilaiRH = data.kelembaban !== undefined ? data.kelembaban :
-                                data.kelembapan !== undefined ? data.kelembapan : data.humidity;
+            // Dukung beberapa variasi nama field, termasuk format ESP32 Device 5: t dan h.
+            const nilaiSuhu = data && data.suhu !== undefined ? data.suhu :
+                              data && data.temperature !== undefined ? data.temperature :
+                              data ? data.t : undefined;
+            const nilaiRH = data && data.kelembaban !== undefined ? data.kelembaban :
+                            data && data.kelembapan !== undefined ? data.kelembapan :
+                            data && data.humidity !== undefined ? data.humidity :
+                            data ? data.h : undefined;
+
+            if (data && nilaiSuhu !== undefined) {
+                const suhu = Number(nilaiSuhu);
                 const rh = Number(nilaiRH);
                 const status = data.status || hitungStatus(suhu, rh);
 
                 suhuEl.innerText = isNaN(suhu) ? "--.- °C" : `${suhu.toFixed(1)} °C`;
                 rhEl.innerText = isNaN(rh) ? "--.- %" : `${rh.toFixed(1)} %`;
-                timeEl.innerText = data.jam || data.waktu || "--:--:--";
+                // Tampilkan jam saja; jika API mengirim tanggal + jam, ambil bagian HH:MM:SS.
+                const waktuMentah = String(data.jam || data.waktu || "");
+                const cocokJam = waktuMentah.match(/(?:^|\s|T)(\d{2}:\d{2}:\d{2})(?:$|\s|Z)/);
+                timeEl.innerText = cocokJam ? cocokJam[1] : (waktuMentah || "--:--:--");
 
                 // Hormati indikator online/offline yang dikirim langsung oleh API.
                 let basi = data.is_online === false;
                 if (data.timestamp) {
                     const selisihDetik = Math.floor(Date.now() / 1000) - Number(data.timestamp);
                     basi = basi || selisihDetik > OFFLINE_DETIK;
-                } else if (data.tanggal && data.jam) {
-                    const waktuAlat = new Date(`${data.tanggal}T${data.jam}`).getTime();
+                } else if ((data.tanggal || data.tgl) && data.jam) {
+                    const tanggalAlat = data.tanggal || data.tgl;
+                    const waktuAlat = new Date(`${tanggalAlat}T${data.jam}`).getTime();
                     if (!isNaN(waktuAlat)) {
                         const selisihDetik = (Date.now() - waktuAlat) / 1000;
                         basi = basi || selisihDetik > OFFLINE_DETIK;
