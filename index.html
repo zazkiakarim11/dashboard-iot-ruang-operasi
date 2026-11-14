@@ -397,12 +397,8 @@
             return;
         }
 
-        if (isLocalDeviceRoom(i) && !localAccessGranted) {
-            kosong();
-            timeEl.innerText = "--:--:--";
-            setBadge(localNetworkPermission === "denied" ? "IZIN IP LOKAL DITOLAK" : "IZINKAN AKSES IP LOKAL", "bg-wait");
-            return;
-        }
+        // Jangan hentikan pembacaan hanya karena status izin lokal belum terdeteksi.
+        // Coba akses endpoint; browser akan menerapkan izin jaringan lokal dan CORS.
 
         try {
             let data = null;
@@ -474,7 +470,7 @@
                 setBadge("ALAT TIDAK NYALA", "bg-bad");
             }
         } catch (error) {
-            console.error(`Gagal membaca Ruang Operasi ${i}:`, error);
+            console.error(`Gagal membaca Ruang Operasi ${i} dari ${baseUrl}:`, error);
             kosong();
             timeEl.innerText = "--:--:--";
             setBadge(isLocalDeviceRoom(i) ? "IP LOKAL OFFLINE / GAGAL" : "OFFLINE / GAGAL", "bg-bad");
