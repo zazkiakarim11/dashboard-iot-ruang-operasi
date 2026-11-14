@@ -138,7 +138,7 @@
         2: "https://monitoring-ruang-ok-production.up.railway.app/api/data", 
         3: "http://10.220.15.230/data", // <-- Masukkan IP / URL alat temanmu di sini jika ingin pakai slot 3
         4: "https://monitoring-ruang-operasi-7d3e1-default-rtdb.asia-southeast1.firebasedatabase.app/devices/esp01", 
-        5: "http://10.220.15.158/data",  // IP ESP32 Ruang Operasi 5
+        5: "http://10.220.15.158/data"  // IP ESP32 Ruang Operasi 5
     };
 
     const OFFLINE_DETIK = 30;                      
@@ -318,6 +318,15 @@
                     <div class="metric"><span>Kelembaban:</span> <span class="val" id="card-rh-${i}">--.- %</span></div>
                     <div class="metric" style="font-size: 11px; color: #64748b; margin-top: 4px;"><span>Jam alat:</span> <span id="card-time-${i}">--:--:--</span></div>
                     <div id="card-status-${i}" class="badge bg-wait">Menunggu...</div>
+                    ${i === 5 ? `
+                        <button id="connect-room5-btn" type="button" onclick="hubungkanRoom5(event)"
+                            style="display:block; margin:9px auto 0; padding:7px 10px; border:0; border-radius:7px; background:#0d6efd; color:#fff; font-size:11px; font-weight:600; cursor:pointer;">
+                            Hubungkan Device 5
+                        </button>
+                        <div id="connect-room5-note" style="margin-top:6px; text-align:center; font-size:10px; color:#64748b;">
+                            Klik untuk memberi izin akses ke ESP32 lokal.
+                        </div>
+                    ` : ``}
                 </div>
             `;
         }
@@ -397,8 +406,18 @@
             return;
         }
 
-        // Jangan hentikan pembacaan hanya karena status izin lokal belum terdeteksi.
-        // Coba akses endpoint; browser akan menerapkan izin jaringan lokal dan CORS.
+        // Chrome terbaru meminta izin Local Network Access melalui tindakan pengguna.
+        // Device 5 menunggu klik tombol bila izin belum diberikan.
+        if (i === 5 && isLocalDeviceRoom(i) && !localAccessGranted) {
+            kosong();
+            timeEl.innerText = "--:--:--";
+            if (localNetworkPermission === "denied") {
+                setBadge("IZIN JARINGAN LOKAL DITOLAK", "bg-bad");
+            } else {
+                setBadge("KLIK HUBUNGKAN DEVICE 5", "bg-wait");
+            }
+            return;
+        }
 
         try {
             let data = null;
@@ -474,6 +493,62 @@
             kosong();
             timeEl.innerText = "--:--:--";
             setBadge(isLocalDeviceRoom(i) ? "IP LOKAL OFFLINE / GAGAL" : "OFFLINE / GAGAL", "bg-bad");
+        }
+    }
+
+    async function hubungkanRoom5(event) {
+        if (event) event.stopPropagation();
+        const btn = document.getElementById("connect-room5-btn");
+        const note = document.getElementById("connect-room5-note");
+        const badge = document.getElementById("card-status-5");
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Menghubungkan...";
+            btn.style.opacity = "0.7";
+        }
+        if (note) note.textContent = "Meminta izin browser dan menguji endpoint Device 5...";
+        if (badge) { badge.textContent = "MENGUJI KONEKSI..."; badge.className = "badge bg-wait"; }
+
+        try {
+            // Permintaan pertama dipicu langsung oleh klik, sesuai aturan Local Network Access Chrome.
+            const data = await fetchJson(DEVICE_URLS[5], {
+                mode: "cors",
+                cache: "no-store",
+                targetAddressSpace: "local"
+            });
+            const hasTemp = data && (data.t !== undefined || data.suhu !== undefined || data.temperature !== undefined);
+            const hasRh = data && (data.h !== undefined || data.kelembaban !== undefined || data.kelembapan !== undefined || data.humidity !== undefined);
+            if (!hasTemp || !hasRh) throw new Error("JSON terbaca, tetapi field suhu/kelembaban tidak ditemukan.");
+
+            localAccessGranted = true;
+            localNetworkPermission = "granted";
+            if (note) note.textContent = "Terhubung. Data Device 5 sedang diperbarui otomatis.";
+            if (btn) { btn.textContent = "Device 5 Terhubung"; btn.disabled = true; }
+            await perbaruiKartu(5);
+        } catch (error) {
+            console.error("Gagal menghubungkan Device 5:", error);
+            try {
+                if (navigator.permissions && navigator.permissions.query) {
+                    const status = await navigator.permissions.query({ name: "local-network" });
+                    localNetworkPermission = status.state;
+                    localAccessGranted = status.state === "granted";
+                }
+            } catch (e) { /* Browser belum mendukung pemeriksaan izin granular. */ }
+
+            if (badge) {
+                badge.textContent = localNetworkPermission === "denied" ? "IZIN LOKAL DITOLAK" : "GAGAL MEMBACA DATA";
+                badge.className = "badge bg-bad";
+            }
+            if (note) {
+                note.textContent = localNetworkPermission === "denied"
+                    ? "Buka Setelan Situs Chrome → Jaringan lokal → Izinkan, lalu muat ulang dashboard."
+                    : "Endpoint bisa dibuka langsung, tetapi dashboard gagal membaca. Kemungkinan CORS: ESP32 perlu mengirim header Access-Control-Allow-Origin: *. Kirim kode Arduino Device 5 untuk diperbaiki.";
+            }
+            if (btn) {
+                btn.disabled = false;
+                btn.textContent = "Coba Hubungkan Lagi";
+                btn.style.opacity = "1";
+            }
         }
     }
 
